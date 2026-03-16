@@ -1,11 +1,14 @@
 """
 数据获取模块 - 股票数据
+支持: Alpha Vantage (美股) / yfinance (港股) / akshare (A股)
 """
 
-import yfinance as yf
-import akshare as ak
+import requests
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
+
+# Alpha Vantage API Key
+ALPHA_VANTAGE_KEY = "QAQUOPS64YPE6IO5"
 
 
 class StockData:
@@ -13,37 +16,47 @@ class StockData:
     
     @staticmethod
     def get_us_index():
-        """获取美股指数"""
-        try:
-            # 道琼斯、标普500、纳斯达克
-            indices = {
-                "^DJI": "道琼斯",
-                "^GSPC": "标普500",
-                "^IXIC": "纳斯达克"
-            }
-            
-            result = {}
-            for symbol, name in indices.items():
-                ticker = yf.Ticker(symbol)
-                hist = ticker.history(period="2d")
-                if len(hist) >= 2:
-                    latest = hist.iloc[-1]
-                    prev = hist.iloc[-2]
-                    change_pct = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
+        """获取美股指数 (使用 Alpha Vantage)"""
+        # 使用 ETF 代理指数
+        etf_map = {
+            "SPY": "标普500",
+            "DIA": "道琼斯", 
+            "QQQ": "纳斯达克"
+        }
+        
+        result = {}
+        for symbol, name in etf_map.items():
+            try:
+                url = f"https://www.alphavantage.co/query"
+                params = {
+                    "function": "GLOBAL_QUOTE",
+                    "symbol": symbol,
+                    "apikey": ALPHA_VANTAGE_KEY
+                }
+                resp = requests.get(url, params=params, timeout=10)
+                data = resp.json()
+                
+                if "Global Quote" in data:
+                    quote = data["Global Quote"]
+                    price = float(quote.get("05. price", 0))
+                    change = float(quote.get("09. change", 0))
+                    change_pct = float(quote.get("10. change percent", "0").replace("%", ""))
+                    
                     result[name] = {
-                        "price": round(latest['Close'], 2),
-                        "change": round(latest['Close'] - prev['Close'], 2),
+                        "price": round(price, 2),
+                        "change": round(change, 2),
                         "change_pct": round(change_pct, 2),
                     }
-            return result
-        except Exception as e:
-            print(f"获取美股指数失败: {e}")
-            return {}
+            except Exception as e:
+                print(f"获取 {name} 失败: {e}")
+        
+        return result
     
     @staticmethod
     def get_hk_index():
         """获取港股指数"""
         try:
+            import yfinance as yf
             ticker = yf.Ticker("^HSI")
             hist = ticker.history(period="2d")
             if len(hist) >= 2:
@@ -65,7 +78,7 @@ class StockData:
     def get_china_index():
         """获取A股指数"""
         try:
-            # 使用 akshare 获取 A 股指数
+            import akshare as ak
             df = ak.stock_zh_index_spot_em(symbol="上证系列指数")
             
             result = {}
@@ -86,7 +99,6 @@ class StockData:
 
 
 if __name__ == "__main__":
-    # 测试
     stock = StockData()
     print("美股:", stock.get_us_index())
     print("港股:", stock.get_hk_index())
