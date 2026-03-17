@@ -135,11 +135,78 @@ def get_us_market():
     
     return {"date": datetime.now().strftime("%Y-%m-%d"), "indices": {}, "market": "美股"}
 
-def ai_analyze(cn_data, us_data, fx_data):
+def get_futures():
+    """获取国内期货主力合约数据"""
+    try:
+        import akshare as ak
+        
+        # 主要期货品种
+        futures_list = {
+            # 黑色系
+            "RB0": "螺纹钢",
+            "I0": "铁矿石",
+            "HC0": "热卷",
+            "J0": "焦炭",
+            "JM0": "焦煤",
+            # 有色金属
+            "CU0": "铜",
+            "AL0": "铝",
+            "ZN0": "锌",
+            "NI0": "镍",
+            # 贵金属
+            "AU0": "黄金",
+            "AG0": "白银",
+            # 能源化工
+            "SC0": "原油",
+            "FU0": "燃油",
+            "TA0": "PTA",
+            "MA0": "甲醇",
+            # 农产品
+            "M0": "豆粕",
+            "Y0": "豆油",
+            "P0": "棕榈油",
+            "C0": "玉米",
+        }
+        
+        futures_data = {}
+        
+        for code, name in futures_list.items():
+            try:
+                df = ak.futures_main_sina(symbol=code)
+                if not df.empty:
+                    latest = df.iloc[-1]
+                    price = float(latest['收盘价'])
+                    open_price = float(latest['开盘价'])
+                    change_pct = ((price - open_price) / open_price * 100) if open_price > 0 else 0
+                    futures_data[name] = {
+                        "code": code,
+                        "price": price,
+                        "change": change_pct,
+                    }
+            except:
+                continue
+        
+        if futures_data:
+            print(f"  ✓ 期货数据: {len(futures_data)} 个品种")
+        
+        return {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "futures": futures_data,
+            "market": "期货"
+        }
+    except Exception as e:
+        print(f"  ⚠️ 期货数据获取失败: {e}")
+        return {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "futures": {},
+            "market": "期货"
+        }
+
+def ai_analyze(cn_data, us_data, fx_data, futures_data=None):
     """使用 DeepSeek V3 分析市场数据"""
     
     # 构建分析提示
-    prompt_parts = ["你是财经分析师，请分析以下市场数据，给出简短点评（150字以内）：\n"]
+    prompt_parts = ["你是财经分析师，请分析以下市场数据，给出简短点评（200字以内）：\n"]
     
     # A股数据
     if cn_data and cn_data["indices"]:
@@ -154,6 +221,14 @@ def ai_analyze(cn_data, us_data, fx_data):
             if data["price"] > 0:
                 prompt_parts.append(f"{name}: {data['change']:+.2f}%")
     
+    # 期货数据
+    if futures_data and futures_data.get("futures"):
+        prompt_parts.append("\n\n【期货市场】")
+        # 只列出涨跌较大的品种
+        sorted_futures = sorted(futures_data["futures"].items(), key=lambda x: abs(x[1]["change"]), reverse=True)[:5]
+        for name, data in sorted_futures:
+            prompt_parts.append(f"{name}: {data['change']:+.2f}%")
+    
     # 汇率数据
     prompt_parts.append("\n\n【汇率】")
     prompt_parts.append(f"美元/人民币: {fx_data['USD/CNY']}")
@@ -167,7 +242,7 @@ def ai_analyze(cn_data, us_data, fx_data):
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
+            max_tokens=250,
             temperature=0.7,
         )
         return response.choices[0].message.content.strip()
@@ -188,8 +263,10 @@ def generate_report():
     
     us_data = get_us_market()
     
+    futures_data = get_futures()
+    
     print("\n🤖 正在 AI 分析...")
-    analysis = ai_analyze(cn_data, us_data, fx)
+    analysis = ai_analyze(cn_data, us_data, fx, futures_data)
     
     # 生成报告
     report_lines = [
@@ -215,6 +292,27 @@ def generate_report():
     else:
         report_lines.append("\n【美股】")
         report_lines.append("⚠️ 数据暂时不可用（交易时间外或网络问题）")
+    
+    # 期货部分
+    if futures_data and futures_data.get("futures"):
+        report_lines.append("\n【期货主力合约】")
+        
+        # 分类显示
+        categories = {
+            "黑色系": ["螺纹钢", "铁矿石", "热卷", "焦炭", "焦煤"],
+            "有色金属": ["铜", "铝", "锌", "镍"],
+            "贵金属": ["黄金", "白银"],
+            "能源化工": ["原油", "燃油", "PTA", "甲醇"],
+            "农产品": ["豆粕", "豆油", "棕榈油", "玉米"],
+        }
+        
+        for category, names in categories.items():
+            futures_in_cat = {k: v for k, v in futures_data["futures"].items() if k in names}
+            if futures_in_cat:
+                report_lines.append(f"\n  {category}:")
+                for name, data in futures_in_cat.items():
+                    emoji = "🔴" if data["change"] < 0 else "🟢"
+                    report_lines.append(f"  {emoji} {name}: {data['price']} ({data['change']:+.2f}%)")
     
     # 汇率部分
     report_lines.append("\n【汇率】")
