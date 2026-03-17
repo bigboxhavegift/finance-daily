@@ -78,92 +78,62 @@ def get_cn_market():
         return None
 
 def get_us_market():
-    """获取美股数据 (需要 Alpha Vantage API key 或其他数据源)"""
+    """获取美股数据 (Alpha Vantage API)"""
     
-    # 配置 Alpha Vantage API key（免费注册：https://www.alphavantage.co/support/#api-key）
-    ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "demo")
+    # 从环境变量或 .env 文件读取 API key
+    alpha_vantage_key = os.environ.get("ALPHA_VANTAGE_KEY")
+    
+    # 尝试从 .env 文件读取
+    if not alpha_vantage_key:
+        env_file = os.path.join(os.path.dirname(__file__), ".env")
+        if os.path.exists(env_file):
+            with open(env_file, "r") as f:
+                for line in f:
+                    if line.startswith("ALPHA_VANTAGE_KEY="):
+                        alpha_vantage_key = line.split("=", 1)[1].strip()
+                        break
+    
+    if not alpha_vantage_key:
+        print("  ⚠️ 美股数据需要配置 ALPHA_VANTAGE_KEY")
+        print("     注册免费 API: https://www.alphavantage.co/support/#api-key")
+        return {"date": datetime.now().strftime("%Y-%m-%d"), "indices": {}, "market": "美股"}
+    
+    # 使用 ETF 代表指数（Alpha Vantage 免费版不支持直接查询指数）
+    etfs = {
+        "SPY": "标普500",
+        "QQQ": "纳斯达克",
+        "DIA": "道琼斯"
+    }
     
     indices_data = {}
     
-    # 方法1: 尝试使用 Alpha Vantage
-    if ALPHA_VANTAGE_KEY != "demo":
-        try:
-            # 获取标普500数据
-            for symbol, name in [("SPX", "标普500"), ("DJI", "道琼斯"), ("IXIC", "纳斯达克")]:
-                url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={ALPHA_VANTAGE_KEY}"
-                response = requests.get(url, timeout=10)
-                data = response.json()
-                
-                if "Global Quote" in data:
-                    price = float(data["Global Quote"]["05. price"])
-                    change = float(data["Global Quote"]["09. change"])
-                    change_pct = float(data["Global Quote"]["10. change percent"].replace("%", ""))
-                    indices_data[name] = {"price": price, "change": change_pct}
-            
-            if indices_data:
-                print(f"  ✓ 美股数据: Alpha Vantage")
-                return {
-                    "date": datetime.now().strftime("%Y-%m-%d"),
-                    "indices": indices_data,
-                    "market": "美股"
-                }
-        except Exception as e:
-            print(f"  ⚠️ Alpha Vantage 获取失败: {e}")
-    
-    # 方法2: 尝试使用 yfinance（可能被限流）
     try:
-        import yfinance as yf
-        
-        symbols = {"^DJI": "道琼斯", "^IXIC": "纳斯达克", "^GSPC": "标普500"}
-        
-        for symbol, name in symbols.items():
-            try:
-                ticker = yf.Ticker(symbol)
-                info = ticker.info
-                if info:
-                    price = info.get("regularMarketPrice", 0)
-                    prev_close = info.get("previousClose", price)
-                    if price > 0:
-                        change = (price - prev_close) / prev_close * 100
-                        indices_data[name] = {"price": price, "change": change}
-            except:
-                continue
+        for symbol, name in etfs.items():
+            url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={alpha_vantage_key}"
+            response = requests.get(url, timeout=15)
+            data = response.json()
+            
+            if "Global Quote" in data and data["Global Quote"]:
+                quote = data["Global Quote"]
+                price = float(quote["05. price"])
+                change_pct = float(quote["10. change percent"].replace("%", ""))
+                indices_data[name] = {"price": price, "change": change_pct}
+            
+            # Alpha Vantage 免费版有频率限制，每次调用间隔 0.5 秒
+            import time
+            time.sleep(0.5)
         
         if indices_data:
-            print(f"  ✓ 美股数据: Yahoo Finance")
+            print(f"  ✓ 美股数据: Alpha Vantage ({len(indices_data)} 个指数)")
             return {
                 "date": datetime.now().strftime("%Y-%m-%d"),
                 "indices": indices_data,
                 "market": "美股"
             }
     except Exception as e:
-        pass
+        print(f"  ⚠️ 美股数据获取失败: {e}")
     
-    # 方法3: 使用缓存的上一个交易日数据
-    cache_file = "us_market_cache.json"
-    if os.path.exists(cache_file):
-        try:
-            import json
-            with open(cache_file, "r") as f:
-                cached = json.load(f)
-                cache_date = cached.get("date", "")
-                today = datetime.now().strftime("%Y-%m-%d")
-                
-                # 如果缓存是今天的，使用缓存
-                if cache_date == today:
-                    print(f"  ✓ 美股数据: 缓存数据")
-                    return cached
-        except:
-            pass
-    
-    # 所有方法都失败，返回空数据
-    print(f"  ⚠️ 美股数据暂时不可用")
-    print(f"     提示: 注册免费 Alpha Vantage API key 后设置环境变量 ALPHA_VANTAGE_KEY")
-    return {
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "indices": {},
-        "market": "美股"
-    }
+    return {"date": datetime.now().strftime("%Y-%m-%d"), "indices": {}, "market": "美股"}
 
 def ai_analyze(cn_data, us_data, fx_data):
     """使用 DeepSeek V3 分析市场数据"""
