@@ -78,58 +78,92 @@ def get_cn_market():
         return None
 
 def get_us_market():
-    """获取美股数据 (akshare 免费)"""
+    """获取美股数据 (需要 Alpha Vantage API key 或其他数据源)"""
+    
+    # 配置 Alpha Vantage API key（免费注册：https://www.alphavantage.co/support/#api-key）
+    ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "demo")
+    
+    indices_data = {}
+    
+    # 方法1: 尝试使用 Alpha Vantage
+    if ALPHA_VANTAGE_KEY != "demo":
+        try:
+            # 获取标普500数据
+            for symbol, name in [("SPX", "标普500"), ("DJI", "道琼斯"), ("IXIC", "纳斯达克")]:
+                url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={ALPHA_VANTAGE_KEY}"
+                response = requests.get(url, timeout=10)
+                data = response.json()
+                
+                if "Global Quote" in data:
+                    price = float(data["Global Quote"]["05. price"])
+                    change = float(data["Global Quote"]["09. change"])
+                    change_pct = float(data["Global Quote"]["10. change percent"].replace("%", ""))
+                    indices_data[name] = {"price": price, "change": change_pct}
+            
+            if indices_data:
+                print(f"  ✓ 美股数据: Alpha Vantage")
+                return {
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "indices": indices_data,
+                    "market": "美股"
+                }
+        except Exception as e:
+            print(f"  ⚠️ Alpha Vantage 获取失败: {e}")
+    
+    # 方法2: 尝试使用 yfinance（可能被限流）
     try:
-        import akshare as ak
+        import yfinance as yf
         
-        # 获取美股主要指数
-        df = ak.index_us_stock_sina()
+        symbols = {"^DJI": "道琼斯", "^IXIC": "纳斯达克", "^GSPC": "标普500"}
         
-        indices = {}
-        # 检查列名
-        name_col = "name" if "name" in df.columns else "名称"
-        price_col = "price" if "price" in df.columns else "最新价"
-        change_col = "change" if "change" in df.columns else "涨跌幅"
+        for symbol, name in symbols.items():
+            try:
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+                if info:
+                    price = info.get("regularMarketPrice", 0)
+                    prev_close = info.get("previousClose", price)
+                    if price > 0:
+                        change = (price - prev_close) / prev_close * 100
+                        indices_data[name] = {"price": price, "change": change}
+            except:
+                continue
         
-        for name in ["道琼斯", "纳斯达克", "标普500", " Dow Jones", "Nasdaq", "S&P 500"]:
-            row = df[df[name_col].str.contains(name.replace("道琼斯", "Dow").replace("纳斯达克", "Nasdaq").replace("标普", "S&P"), case=False, na=False)]
-            if not row.empty:
-                cn_name = {"Dow": "道琼斯", "Nasdaq": "纳斯达克", "S&P": "标普500"}.get(name, name)
-                try:
-                    price = float(row[price_col].values[0])
-                    change = float(str(row[change_col].values[0]).replace("%", ""))
-                    indices[cn_name] = {"price": price, "change": change}
-                except:
-                    continue
-        
-        # 如果上述方法失败，直接取前三行
-        if not indices and len(df) >= 3:
-            for i in range(min(3, len(df))):
-                name = df.iloc[i][name_col]
-                try:
-                    price = float(df.iloc[i][price_col])
-                    change = float(str(df.iloc[i][change_col]).replace("%", ""))
-                    indices[name] = {"price": price, "change": change}
-                except:
-                    continue
-        
-        return {
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "indices": indices,
-            "top_gainers": [],
-            "top_losers": [],
-            "market": "美股"
-        }
+        if indices_data:
+            print(f"  ✓ 美股数据: Yahoo Finance")
+            return {
+                "date": datetime.now().strftime("%Y-%m-%d"),
+                "indices": indices_data,
+                "market": "美股"
+            }
     except Exception as e:
-        print(f"⚠️ 美股数据获取失败: {e}")
-        # 返回空数据，不使用假数据
-        return {
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "indices": {},
-            "top_gainers": [],
-            "top_losers": [],
-            "market": "美股"
-        }
+        pass
+    
+    # 方法3: 使用缓存的上一个交易日数据
+    cache_file = "us_market_cache.json"
+    if os.path.exists(cache_file):
+        try:
+            import json
+            with open(cache_file, "r") as f:
+                cached = json.load(f)
+                cache_date = cached.get("date", "")
+                today = datetime.now().strftime("%Y-%m-%d")
+                
+                # 如果缓存是今天的，使用缓存
+                if cache_date == today:
+                    print(f"  ✓ 美股数据: 缓存数据")
+                    return cached
+        except:
+            pass
+    
+    # 所有方法都失败，返回空数据
+    print(f"  ⚠️ 美股数据暂时不可用")
+    print(f"     提示: 注册免费 Alpha Vantage API key 后设置环境变量 ALPHA_VANTAGE_KEY")
+    return {
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "indices": {},
+        "market": "美股"
+    }
 
 def ai_analyze(cn_data, us_data, fx_data):
     """使用 DeepSeek V3 分析市场数据"""
@@ -183,8 +217,6 @@ def generate_report():
         print(f"  ✓ A股数据: {len(cn_data['indices'])} 个指数")
     
     us_data = get_us_market()
-    if us_data and us_data["indices"]:
-        print(f"  ✓ 美股数据: {len(us_data['indices'])} 个指数")
     
     print("\n🤖 正在 AI 分析...")
     analysis = ai_analyze(cn_data, us_data, fx)
@@ -210,6 +242,9 @@ def generate_report():
             if data["price"] > 0:
                 emoji = "📈" if data["change"] > 0 else "📉"
                 report_lines.append(f"{emoji} {name} {data['price']:,.2f} ({data['change']:+.2f}%)")
+    else:
+        report_lines.append("\n【美股】")
+        report_lines.append("⚠️ 数据暂时不可用（交易时间外或网络问题）")
     
     # 汇率部分
     report_lines.append("\n【汇率】")
